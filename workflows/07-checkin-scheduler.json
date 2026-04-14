@@ -1,0 +1,138 @@
+{
+  "name": "07 — Check-in Scheduler",
+  "nodes": [
+    {
+      "id": "a7000001-0000-0000-0000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a7000002-0000-0000-0000-000000000001",
+      "name": "Set Custom Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\n$execution.customData.set('hire_id', hire.hire_id);\n$execution.customData.set('full_name', hire.full_name);\n$execution.customData.set('workflow_stage', '07-checkin-scheduler');\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a7000003-0000-0000-0000-000000000001",
+      "name": "Calculate Check-in Timestamps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\nconst startDate = new Date(hire.start_date + 'T09:00:00');\n\nfunction addDays(date, days) {\n  const d = new Date(date);\n  d.setDate(d.getDate() + days);\n  return d.toISOString();\n}\n\nconst events = [\n  { hire_id: hire.hire_id, event_type: 'DAY_7',  scheduled_at: addDays(startDate, 7) },\n  { hire_id: hire.hire_id, event_type: 'DAY_14', scheduled_at: addDays(startDate, 14) },\n  { hire_id: hire.hire_id, event_type: 'DAY_30', scheduled_at: addDays(startDate, 30) }\n];\n\nreturn events.map(e => ({ json: { ...hire, scheduled_event: e } }));"
+      }
+    },
+    {
+      "id": "a7000004-0000-0000-0000-000000000001",
+      "name": "Postgres — Insert Scheduled Events",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO scheduled_events (hire_id, event_type, scheduled_at, status) VALUES ($1, $2, $3, 'PENDING') ON CONFLICT (hire_id, event_type) DO NOTHING",
+        "options": {
+          "queryReplacement": "={{ $json.scheduled_event.hire_id }},{{ $json.scheduled_event.event_type }},{{ $json.scheduled_event.scheduled_at }}",
+          "queryBatching": "single"
+        }
+      }
+    },
+    {
+      "id": "a7000005-0000-0000-0000-000000000001",
+      "name": "Collect + Pass to Audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "parameters": {
+        "jsCode": "// All 3 scheduled_event rows processed — return first item's hire payload with count\nconst hire = $input.first().json;\nreturn [{ json: { ...hire, check_ins_scheduled: 3 } }];"
+      }
+    },
+    {
+      "id": "a7000006-0000-0000-0000-000000000001",
+      "name": "Execute — 08 Audit Log",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1250, 300],
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "id", "value": "[08_AUDIT_LOG_WORKFLOW_ID]" },
+        "options": { "waitForSubWorkflow": true }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Custom Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Custom Data": {
+      "main": [
+        [
+          {
+            "node": "Calculate Check-in Timestamps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Check-in Timestamps": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert Scheduled Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert Scheduled Events": {
+      "main": [
+        [
+          {
+            "node": "Collect + Pass to Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect + Pass to Audit": {
+      "main": [
+        [
+          {
+            "node": "Execute — 08 Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
