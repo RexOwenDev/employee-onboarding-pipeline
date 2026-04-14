@@ -1,0 +1,28 @@
+# Environment and secrets — NEVER commit live credentials
+.env
+.env.*
+*.env
+secrets/
+credentials/
+
+# Local n8n export artifacts (use workflows/ for committed files)
+*.bak
+n8n-export/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Node (if any tooling is added)
+node_modules/
+
+# Logs
+*.log
+
+# NOTE: workflows/ directory IS committed — this is the entire point of the repo
+# NOTE: replacements.txt IS committed — it contains placeholder names, not values
