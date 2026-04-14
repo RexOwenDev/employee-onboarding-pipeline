@@ -1,0 +1,93 @@
+{
+  "name": "04 — Account Provisioning",
+  "nodes": [
+    {
+      "id": "a4000001-0000-0000-0000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a4000002-0000-0000-0000-000000000001",
+      "name": "Set Custom Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\n$execution.customData.set('hire_id', hire.hire_id);\n$execution.customData.set('full_name', hire.full_name);\n$execution.customData.set('workflow_stage', '04-account-provisioning');\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a4000003-0000-0000-0000-000000000001",
+      "name": "Provision All Services",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst hire = $input.first().json;\nconst plan = hire.provisioning_plan || {};\nconst results = {};\n\n// Per-service isolation: one failure writes FAILED but does NOT throw.\nasync function provision(name, fn) {\n  try {\n    await fn();\n    results[name] = 'SUCCESS';\n  } catch (err) {\n    results[name] = 'FAILED';\n    results[`${name}_error`] = err.message;\n    // Intentionally NOT rethrowing — per-service isolation.\n  }\n}\n\n// GSuite Service Account JWT assertion flow (creates domain-wide delegation token)\nasync function getGSuiteToken() {\n  const sa = JSON.parse($env['GSUITE_SERVICE_ACCOUNT_JSON']);\n  const now = Math.floor(Date.now() / 1000);\n  const h = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');\n  const p = Buffer.from(JSON.stringify({\n    iss: sa.client_email,\n    sub: $env['GSUITE_ADMIN_EMAIL'],\n    scope: 'https://www.googleapis.com/auth/admin.directory.user',\n    aud: 'https://oauth2.googleapis.com/token',\n    iat: now,\n    exp: now + 3600\n  })).toString('base64url');\n  const sign = crypto.createSign('RSA-SHA256');\n  sign.update(`${h}.${p}`);\n  const jwt = `${h}.${p}.${sign.sign(sa.private_key, 'base64url')}`;\n  const r = await fetch('https://oauth2.googleapis.com/token', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },\n    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`\n  });\n  const d = await r.json();\n  if (!d.access_token) throw new Error(`GSuite token failed: ${JSON.stringify(d)}`);\n  return d.access_token;\n}\n\n// 1. GSuite — Create user\nawait provision('gsuite', async () => {\n  const token = await getGSuiteToken();\n  const emailUser = `${hire.first_name.toLowerCase()}.${hire.last_name.toLowerCase()}`;\n  const workEmail = `${emailUser}@[EMAIL_DOMAIN]`;\n  const r = await fetch('https://admin.googleapis.com/admin/directory/v1/users', {\n    method: 'POST',\n    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      primaryEmail: workEmail,\n      name: { givenName: hire.first_name, familyName: hire.last_name },\n      password: crypto.randomBytes(24).toString('hex'),\n      changePasswordAtNextLogin: true,\n      orgUnitPath: plan.gsuite_ou || '/Employees'\n    })\n  });\n  if (!r.ok) {\n    const e = await r.json();\n    throw new Error(`GSuite: ${e.error?.message || r.status}`);\n  }\n  results.work_email = workEmail;\n});\n\n// 2. Slack — Invite to workspace\nawait provision('slack', async () => {\n  const r = await fetch('https://slack.com/api/users.admin.invite', {\n    method: 'POST',\n    headers: { 'Authorization': 'Bearer [SLACK_BOT_TOKEN]', 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      email: hire.personal_email,\n      real_name: hire.full_name,\n      channels: (plan.slack_channels || []).join(',')\n    })\n  });\n  const d = await r.json();\n  if (!d.ok) throw new Error(`Slack: ${d.error}`);\n});\n\n// 3. Notion — Member onboarding page\nawait provision('notion', async () => {\n  if (!plan.notion_page_id) { results.notion = 'SKIPPED'; return; }\n  const r = await fetch('https://api.notion.com/v1/pages', {\n    method: 'POST',\n    headers: {\n      'Authorization': 'Bearer [NOTION_INTEGRATION_TOKEN]',\n      'Notion-Version': '2022-06-28',\n      'Content-Type': 'application/json'\n    },\n    body: JSON.stringify({\n      parent: { page_id: plan.notion_page_id },\n      properties: {\n        title: { title: [{ text: { content: `${hire.full_name} — Onboarding (${hire.start_date})` } }] }\n      }\n    })\n  });\n  if (!r.ok) {\n    const e = await r.json();\n    throw new Error(`Notion: ${e.message || r.status}`);\n  }\n});\n\n// 4. Conditional tool adapters — stubs per client\nconst conditionalTools = (plan.tools || []).filter(t => !['gsuite', 'slack', 'notion'].includes(t));\nfor (const tool of conditionalTools) {\n  await provision(tool, async () => {\n    switch (tool) {\n      case 'github':  throw new Error('[GITHUB_ADAPTER] Stub — see SETUP.md §4.1');\n      case 'linear':  throw new Error('[LINEAR_ADAPTER] Stub — see SETUP.md §4.2');\n      case 'hubspot': throw new Error('[HUBSPOT_ADAPTER] Stub — see SETUP.md §4.3');\n      case 'canva':   throw new Error('[CANVA_ADAPTER] Stub — see SETUP.md §4.4');\n      default: results[tool] = 'SKIPPED — no adapter';\n    }\n  });\n}\n\nreturn [{\n  json: {\n    ...hire,\n    provisioning_results: results,\n    pipeline_started_at: hire.received_at\n  }\n}];"
+      }
+    },
+    {
+      "id": "a4000004-0000-0000-0000-000000000001",
+      "name": "Postgres — Record + Update Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO onboarding_events (hire_id, event_type, status, details, performed_by) VALUES ($1,'PROVISIONED','SUCCESS',$2::jsonb,'system'); UPDATE new_hires SET status='PROVISIONED', updated_at=NOW() WHERE hire_id=$1;",
+        "options": {
+          "queryReplacement": "={{ $json.hire_id }},{{ JSON.stringify($json.provisioning_results) }}",
+          "queryBatching": "transaction"
+        }
+      }
+    },
+    {
+      "id": "a4000005-0000-0000-0000-000000000001",
+      "name": "Execute — 05 Stakeholder Notifications",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1050, 300],
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "id", "value": "[05_STAKEHOLDER_NOTIFICATIONS_WORKFLOW_ID]" },
+        "options": { "waitForSubWorkflow": true }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [{ "node": "Set Custom Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Custom Data": {
+      "main": [
+        [{ "node": "Provision All Services", "type": "main", "index": 0 }]
+      ]
+    },
+    "Provision All Services": {
+      "main": [
+        [{ "node": "Postgres — Record + Update Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Postgres — Record + Update Status": {
+      "main": [
+        [{ "node": "Execute — 05 Stakeholder Notifications", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
