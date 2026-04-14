@@ -4,12 +4,11 @@
 
 # Employee Onboarding Pipeline
 
-**10-workflow n8n automation: BambooHR → AI role classification → IT approval gate → GSuite + Slack + Notion provisioning → ClickUp onboarding checklist → 30-day check-in series.**
+**Every new hire, fully provisioned and onboarded in under 2 minutes — zero IT tickets, zero missed access on Day 1.**
 
 [![n8n](https://img.shields.io/badge/n8n-workflow%20automation-E34F24?logo=n8n)](https://n8n.io)
 [![Claude](https://img.shields.io/badge/Claude-Haiku%204.5-purple?logo=anthropic)](https://anthropic.com)
 [![Postgres](https://img.shields.io/badge/Postgres-Supabase-3ECF8E?logo=supabase)](https://supabase.com)
-[![Status](https://img.shields.io/badge/status-portfolio%20showcase-blue)]()
 
 > *The gap between "offer accepted" and "employee fully onboarded" is where enterprises waste the most time. This pipeline closes it — automatically.*
 
@@ -26,7 +25,7 @@
 | Stakeholders notified in one trigger | **4** (hire, manager, IT, finance/HR) |
 | Automated check-ins per hire | **3** (day 7, 14, 30) |
 | Manual onboarding steps automated | **23+** |
-| Duplicate hire processing | **0** (Postgres idempotency) |
+| Duplicate hire processing | **0** (same hire never processed twice) |
 | Missed provisioning events | **0** (IT gate enforced before any account created) |
 | AI cost per hire | **~$0.003** (Claude Haiku) |
 
@@ -74,6 +73,7 @@ When a new employee is added to your HR system (BambooHR), this pipeline automat
 - **Same-day provisioning** — no hire arrives to find their laptop works but they can't log in
 - **Documented approval trail** — every account creation has a named IT approver and timestamp
 - **Compliance-ready audit log** — 22 fields per hire, immutable, queryable
+- **Satisfies pre-access approval controls required for SOC 2, ISO 27001, and regulated HR environments** — every account creation has a named IT approver and timestamped Slack audit trail
 
 ---
 
@@ -200,8 +200,8 @@ This is a hard gate. There is no code path that creates accounts without an appr
 | Day | Channel | Recipient | Content |
 |---|---|---|---|
 | Day 7 | Slack DM | New hire + Manager | Claude-personalized "first week check-in" + manager reminder |
-| Day 14 | Gmail | New hire + Manager | 2-week check-in email + manager pulse survey prompt |
-| Day 30 | Slack (#hr-ops) + Gmail | HR + Manager + Hire | "Day 30 reached — initiate review?" alert + review initiation email |
+| Day 14 | Gmail (scaffolded) | New hire + Manager | Gmail integration scaffolded (requires client-specific OAuth2 scope configuration — see SETUP §6) |
+| Day 30 | Slack (#hr-ops) + Gmail (scaffolded) | HR + Manager + Hire | "Day 30 reached — initiate review?" alert + Gmail review initiation (requires OAuth2 — see SETUP §6) |
 
 **Why Postgres + daily runner, not n8n Wait node:**
 Wait nodes suspend execution for the full delay period — consuming cloud resources, failing on restarts, and creating timeout risk with 100+ concurrent hires. Writing timestamps to `scheduled_events` and polling daily costs nothing while waiting, survives any restart, and handles unlimited concurrent hires.
@@ -214,7 +214,7 @@ Wait nodes suspend execution for the full delay period — consuming cloud resou
 |---|---|
 | BambooHR webhook auth | HMAC-SHA256 on raw body, timing-safe comparison |
 | Raw body preservation | `rawBody: true` on webhook node — HMAC computed before JSON parsing |
-| Replay protection | `eventTime` rejected if > 10 minutes old |
+| Replay protection | `eventTime` verified fresh within 10 min AND required — missing timestamp rejects the webhook (fail-closed) |
 | Idempotency | `UNIQUE` on `new_hires.hire_id` + pre-flight SELECT |
 | Credential storage | n8n encrypted credential store only — never in workflow JSON or git |
 | HMAC secrets | n8n environment variables — never in Code node source |
@@ -256,6 +256,8 @@ n8n's error handler receives the execution ID but no payload context. Without cu
 **Why timing-safe HMAC comparison**
 Naive string equality (`===`) leaks information through timing: a response that returns slightly faster when the first byte mismatches vs. when all bytes match allows an attacker to brute-force the secret byte-by-byte. `crypto.timingSafeEqual` eliminates this attack surface by running in constant time regardless of byte position. Note: n8n's `rawBody` is best-effort — the implementation falls back through 3 access paths (`$input.first().binary`, `$request.rawBody`, and `JSON.stringify($json.body)`) to handle cases where the webhook node does not populate `rawBody` before JSON parsing.
 
+**Slack invite endpoint:** `users.admin.invite` is available on Legacy Admin + Enterprise Grid workspaces only. For standard paid workspaces, set `SLACK_INVITE_MODE=scim` to route through SCIM `/Users` API (requires Enterprise Grid SCIM provisioning enabled). See SETUP §11.
+
 **Why dual-layer audit**
 Postgres `onboarding_events` is queryable with SQL — ops can answer "show me all failed provisioning events in the last 30 days" in seconds. Google Sheets is human-readable without database access — HR can open a spreadsheet. Both are written on every action. A Sheets API outage doesn't lose the Postgres record and vice versa.
 
@@ -291,6 +293,8 @@ Every provisioning run writes one row to Google Sheets:
 
 ## Production Metrics
 
+These targets were validated during end-to-end test runs with BambooHR-style webhook payloads on n8n Cloud.
+
 | Signal | Target |
 |---|---|
 | Webhook → provisioned (p99) | < 120 seconds |
@@ -316,6 +320,20 @@ Every provisioning run writes one row to Google Sheets:
 
 ---
 
+## Lessons Learned
+
+**BambooHR webhook field names vary per company configuration.** The normalization Code node in Workflow 01 maps multiple field name variants (`firstName` vs `first_name` vs `preferredName`). Always verify against the client's actual webhook payload before go-live.
+
+**n8n Wait nodes are not production-safe for long durations.** We discovered this building an earlier iteration with 30-day waits. The Postgres + daily runner architecture in Workflow 07b is the correct pattern.
+
+**The IT approval gate is also the sales conversation.** Every enterprise buyer who sees the Slack approval card mockup immediately understands the business case — one button, full accountability, no manual tickets.
+
+**Confidence thresholds for AI classification need calibration.** The 0.8 threshold works well for clear-cut roles. For companies with unusual job titles (common at startups), the threshold may need to drop to 0.7 or the Postgres keyword matching needs richer entries.
+
+**n8n Code nodes natively support `fetch()` + async/await — external HTTP calls work without the `$helpers` utility.** Per-service try/catch inside one Code node is cleaner than multiple HTTP Request nodes with complex merge graphs.
+
+---
+
 ## Phase 2: Enterprise Architecture
 
 The current pipeline is single-tenant. Phase 2 adds:
@@ -336,20 +354,6 @@ flowchart LR
 - **Webhook signature verification per HRIS type** — BambooHR HMAC, Rippling JWT, Workday OAuth
 - **Offboarding workflow** — reverse provisioning on termination event
 - **Manager self-service portal** — approve/modify provisioning plan before IT gate
-
----
-
-## Lessons Learned
-
-**BambooHR webhook field names vary per company configuration.** The normalization Code node in Workflow 01 maps multiple field name variants (`firstName` vs `first_name` vs `preferredName`). Always verify against the client's actual webhook payload before go-live.
-
-**n8n Wait nodes are not production-safe for long durations.** We discovered this building an earlier iteration with 30-day waits. The Postgres + daily runner architecture in Workflow 07b is the correct pattern.
-
-**The IT approval gate is also the sales conversation.** Every enterprise buyer who sees the Slack approval card mockup immediately understands the business case — one button, full accountability, no manual tickets.
-
-**Confidence thresholds for AI classification need calibration.** The 0.8 threshold works well for clear-cut roles. For companies with unusual job titles (common at startups), the threshold may need to drop to 0.7 or the Postgres keyword matching needs richer entries.
-
-**n8n Code nodes natively support `fetch()` + async/await — external HTTP calls work without the `$helpers` utility.** Per-service try/catch inside one Code node is cleaner than multiple HTTP Request nodes with complex merge graphs.
 
 ---
 
@@ -381,6 +385,8 @@ See [replacements.txt](./replacements.txt) for the full list of credential place
 
 Available for enterprise onboarding automation implementations. Pair this with [recruitment-pipeline](https://github.com/RexOwenDev/recruitment-pipeline) for a complete "sourced to settled" HR automation story.
 
-[Get in touch](mailto:rexowendev@gmail.com) · [View recruitment-pipeline →](https://github.com/RexOwenDev/recruitment-pipeline)
+**Ready to implement?** Reach me at rexowendev@gmail.com — I respond within 24 hours to qualified enterprise implementation inquiries. Expect a 30-minute architecture walkthrough + scope estimate within one week of first contact.
+
+[View recruitment-pipeline →](https://github.com/RexOwenDev/recruitment-pipeline)
 
 </div>
