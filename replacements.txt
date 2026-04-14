@@ -199,8 +199,8 @@ GSUITE_ADMIN_EMAIL
 ################################################################################
 
 [SLACK_BOT_TOKEN]
-  Value:  Slack Bot OAuth token (starts with xoxb-)
-          (e.g., xoxb-EXAMPLE-TOKEN-PLACEHOLDER)
+  Value:  Slack Bot OAuth token (format: xoxb-{numbers}-{numbers}-{alphanumeric})
+          (obtain from Slack API dashboard — do NOT paste real token here)
   Where:  04-account-provisioning.json → Code node "Provision All Accounts"
           (Slack invite call, Authorization header)
           07b-checkin-runner.json → Code node "Send Check-in Messages"
