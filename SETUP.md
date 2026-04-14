@@ -193,6 +193,8 @@ VALUES (
 **This requires knowing the client's actual onboarding process.** Start with universals, then add
 role-specific tasks.
 
+Task template construction requires mapping each client's ClickUp user IDs to HR roles — a step that requires IT and HR coordinator involvement and cannot be pre-seeded. ClickUp assignees in the JSON (`[CLICKUP_HIRE_USER_ID]`, etc.) are STATIC placeholders — dynamic per-hire assignment requires additional lookup logic that is out of scope for this baseline.
+
 ```sql
 -- Universal tasks (role_group = 'ALL')
 INSERT INTO onboarding_templates
@@ -282,20 +284,11 @@ Required: GitHub Personal Access Token with `admin:org` scope. Store in n8n env 
 
 ### §4.2 Linear Adapter
 
-```javascript
-const resp = await fetch('https://api.linear.app/graphql', {
-  method: 'POST',
-  headers: {
-    'Authorization': '[LINEAR_API_KEY]',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    query: `mutation { memberInvite(email: "EMAIL", teamId: "TEAM_ID") { success } }`
-  })
-});
-const result = await resp.json();
-if (!result.data?.memberInvite?.success) throw new Error('Linear invite failed');
-```
+- **API endpoint:** `https://api.linear.app/graphql`
+- **Required scope:** `write` (for member mutation)
+- **Auth header:** `Authorization: <LINEAR_API_KEY>`
+
+Implement the `memberInvite` mutation per Linear's current GraphQL schema. Field names and required variables are available in Linear's API docs — they change. Client-specific implementation.
 
 Required: Linear API key with admin access. Store as `LINEAR_API_KEY`.
 
@@ -351,6 +344,87 @@ After creating the sheet, copy the Sheet ID from the URL
 > **Implementation note:** The append node uses `cellFormat: "RAW"` to prevent formula
 > injection. Do not change this to `USER_ENTERED` — hire names or email values containing
 > `=` would be interpreted as formulas.
+
+---
+
+## §6: Gmail OAuth2 Token Refresh
+
+Workflow 07b currently **scaffolds** Day 14 and Day 30 Gmail sends — the code path logs
+`SKIPPED_GMAIL_STUB` instead of sending. This is intentional: Gmail sending via Code nodes
+requires an OAuth2 refresh token that cannot be pre-seeded without a client-specific Google
+account. This section documents how to upgrade to real Gmail sending.
+
+### Why Gmail from Code nodes requires OAuth2 refresh
+
+n8n's native Gmail node handles token refresh automatically. When sending Gmail from a Code
+node (as 07b does, to keep all check-in logic in one node), you must manage OAuth2 token
+refresh yourself. The access token from n8n's credential store expires every 60 minutes.
+The Code node must exchange the refresh token for a new access token before each send.
+
+### Setup steps
+
+1. **GCP Console → APIs & Services → Credentials → OAuth 2.0 Client IDs → Create:**
+   - Application type: Web application
+   - Authorized redirect URI: `https://developers.google.com/oauthplayground`
+
+2. **Google OAuth Playground (`https://developers.google.com/oauthplayground`):**
+   - Click gear icon → check "Use your own OAuth credentials" → enter your Client ID + Secret
+   - Step 1: Select `https://www.googleapis.com/auth/gmail.send`
+   - Step 2: Authorize and exchange
+   - Step 3: Copy the **Refresh Token** (long-lived; does not expire unless revoked)
+
+3. **Store in n8n Settings → Variables:**
+   - `GMAIL_CLIENT_ID` — OAuth2 Client ID from GCP
+   - `GMAIL_CLIENT_SECRET` — OAuth2 Client Secret from GCP
+   - `GMAIL_REFRESH_TOKEN` — Refresh token from OAuth Playground
+   - `GMAIL_SENDER_EMAIL` — The Google account email used to authenticate
+
+4. **In Workflow 07b "Send Check-in Messages" Code node**, replace the `SKIPPED_GMAIL_STUB`
+   log lines for DAY_14 and DAY_30 with:
+
+   ```javascript
+   // 1. Refresh access token
+   const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+     body: new URLSearchParams({
+       client_id: $env['GMAIL_CLIENT_ID'],
+       client_secret: $env['GMAIL_CLIENT_SECRET'],
+       refresh_token: $env['GMAIL_REFRESH_TOKEN'],
+       grant_type: 'refresh_token'
+     })
+   });
+   const { access_token } = await tokenResp.json();
+
+   // 2. Build RFC 2822 email (base64url-encoded)
+   const raw = btoa(
+     `From: ${$env['GMAIL_SENDER_EMAIL']}\r\n` +
+     `To: ${hireEmail}\r\n` +
+     `Subject: ${subject}\r\n\r\n` +
+     `${body}`
+   ).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+   // 3. Send via Gmail API
+   const sendResp = await fetch(
+     `https://gmail.googleapis.com/gmail/v1/users/me/messages/send`,
+     {
+       method: 'POST',
+       headers: {
+         'Authorization': `Bearer ${access_token}`,
+         'Content-Type': 'application/json'
+       },
+       body: JSON.stringify({ raw })
+     }
+   );
+   if (!sendResp.ok) throw new Error(`Gmail send failed: ${sendResp.status}`);
+   ```
+
+5. **Remove the `SKIPPED_GMAIL_STUB` status** from the event log write and replace with
+   `SENT` once the above code is in place and tested end-to-end.
+
+> **Note:** Until this section is implemented, the 07b DAY_14 and DAY_30 paths mark events
+> as `SKIPPED_GMAIL_STUB` in the Postgres event log. The pipeline continues normally —
+> only the Gmail send is skipped. Slack check-ins (DAY_7, DAY_30 #hr-ops) are unaffected.
 
 ---
 
@@ -543,3 +617,70 @@ webhooks to fail HMAC verification.
   it can read and write all user accounts in the Google Workspace org.
   **Restrict n8n admin access accordingly.** Do not grant n8n editor access to anyone who
   should not have GSuite Super Admin equivalent capability.
+
+---
+
+## §11: Slack Invite Mode Configuration
+
+Workflow 04's Slack provisioning branch calls `users.admin.invite`. This endpoint is
+**only available on Legacy Admin workspaces and Enterprise Grid workspaces**. Standard paid
+Slack workspaces (Pro, Business+) do not have access to `users.admin.invite` and will
+receive a `not_allowed` error.
+
+### Determining your client's Slack workspace type
+
+| Workspace type | `users.admin.invite` available? | Recommended mode |
+|---|---|---|
+| Enterprise Grid | Yes | `legacy` |
+| Legacy Admin (grandfathered) | Yes | `legacy` |
+| Business+ (standard paid) | No | `scim` |
+| Pro | No | `scim` |
+
+### Configuring `SLACK_INVITE_MODE`
+
+Set the `SLACK_INVITE_MODE` n8n environment variable before activating Workflow 04:
+
+```
+n8n Settings → Variables → New Variable
+  Name:  SLACK_INVITE_MODE
+  Value: "legacy"   ← for Enterprise Grid or Legacy Admin
+          "scim"    ← for Business+ or Pro with SCIM enabled
+```
+
+**Default:** `legacy` — if the variable is unset, the Code node defaults to `legacy` mode.
+
+### SCIM mode — additional requirements
+
+SCIM mode uses the SCIM 1.1 `/Users` API endpoint instead of `users.admin.invite`.
+Enabling SCIM mode requires:
+
+1. **Enterprise Grid SCIM provisioning enabled** — SCIM is an Enterprise Grid feature. If your
+   client is on Business+, they must upgrade or use a third-party SCIM bridge.
+
+2. **SCIM API token** — different from the Bot Token. Obtain from Slack Admin →
+   Settings → SCIM API Tokens → Generate Token. Store as `SLACK_SCIM_TOKEN` in n8n Variables.
+
+3. **Update the Slack fetch body** in Workflow 04's "Provision All Accounts" Code node
+   (Slack branch). SCIM 1.1 requires a different body structure than `users.admin.invite`:
+
+   ```javascript
+   // SCIM mode body (replace the legacy invite fetch body with this)
+   body: JSON.stringify({
+     schemas: ['urn:scim:schemas:core:1.0'],
+     userName: workEmail,
+     emails: [{ value: workEmail, primary: true }],
+     name: {
+       givenName: hire.first_name,
+       familyName: hire.last_name
+     }
+   })
+   ```
+
+   The SCIM endpoint is:
+   `https://api.slack.com/scim/v1/Users`
+   with header `Authorization: Bearer ${$env['SLACK_SCIM_TOKEN']}`.
+
+> **Note:** SCIM mode sends an invitation only — the user must accept before they appear
+> in Slack. `users.admin.invite` (legacy mode) creates the account immediately. Account
+> downstream logic (channel invites, DM sends) may fail in SCIM mode if the hire has not
+> yet accepted. Design your go-live timing accordingly.

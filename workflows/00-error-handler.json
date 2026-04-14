@@ -11,13 +11,63 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse error payload from n8n Error Trigger\nconst execError = $input.first().json;\nconst customData = execError.execution?.customData || {};\n\n// Classify severity by workflow name\nconst wfName = execError.workflow?.name || '';\nconst severity = (() => {\n  if (wfName.includes('hris-intake') || wfName.includes('it-approval')) return 'CRITICAL';\n  if (wfName.includes('account-provisioning') || wfName.includes('role-classifier')) return 'HIGH';\n  return 'LOW';\n})();\n\nconst severityEmoji = { CRITICAL: '🚨', HIGH: '⚠️', LOW: '📋' }[severity];\n\nconst hireContext = customData.hire_id\n  ? `*Hire:* ${customData.full_name || 'Unknown'} \\`${customData.hire_id}\\``\n  : '_No hire context — error occurred before hire_id was set_';\n\nconst slackText = [\n  `${severityEmoji} *[${severity}] Onboarding Pipeline Error*`,\n  ``,\n  `*Workflow:* ${execError.workflow?.name || 'Unknown'}`,\n  `*Failed Node:* ${execError.execution?.lastNodeExecuted || 'Unknown'}`,\n  `*Error:* ${execError.execution?.error?.message || 'Unknown error'}`,\n  hireContext,\n  `*Execution ID:* \\`${execError.execution?.id || 'Unknown'}\\``,\n  `*Time:* ${new Date().toISOString()}`\n].join('\\n');\n\nreturn [{\n  json: {\n    severity,\n    slackText,\n    workflowName: execError.workflow?.name || 'Unknown',\n    hireId: customData.hire_id || null,\n    fullName: customData.full_name || null,\n    errorMessage: execError.execution?.error?.message || 'Unknown error',\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// Parse error payload from n8n Error Trigger\nconst execError = $input.first().json;\nconst customData = execError.execution?.customData || {};\n\n// Classify severity by workflow name\nconst wfName = execError.workflow?.name || '';\nconst severity = (() => {\n  if (wfName.includes('hris-intake') || wfName.includes('it-approval')) return 'CRITICAL';\n  if (wfName.includes('account-provisioning') || wfName.includes('role-classifier')) return 'HIGH';\n  return 'LOW';\n})();\n\nconst severityEmoji = { CRITICAL: '🚨', HIGH: '⚠️', LOW: '📋' }[severity];\n\nconst hireContext = customData.hire_id\n  ? `*Hire:* ${customData.full_name || 'Unknown'} \\`${customData.hire_id}\\``\n  : '_No hire context — error occurred before hire_id was set_';\n\nconst slackText = [\n  `${severityEmoji} *[${severity}] Onboarding Pipeline Error*`,\n  ``,\n  `*Workflow:* ${execError.workflow?.name || 'Unknown'}`,\n  `*Failed Node:* ${execError.execution?.lastNodeExecuted || 'Unknown'}`,\n  `*Error:* ${execError.execution?.error?.message || 'Unknown error'}`,\n  hireContext,\n  `*Execution ID:* \\`${execError.execution?.id || 'Unknown'}\\``,\n  `*Time:* ${new Date().toISOString()}`\n].join('\\n');\n\nreturn [{\n  json: {\n    severity,\n    slackText,\n    workflowName: execError.workflow?.name || 'Unknown',\n    hireId: customData.hire_id || null,\n    fullName: customData.full_name || null,\n    errorMessage: execError.execution?.error?.message || 'Unknown error',\n    executionId: execError.execution?.id || 'Unknown',\n    timestamp: new Date().toISOString()\n  }\n}];"
       },
       "id": "a0000002-0000-0000-0000-000000000001",
       "name": "Parse Error Context",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hireId }}",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a0000004-0000-0000-0000-000000000001",
+      "name": "Check — hire_id Present?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO onboarding_events (hire_id, event_type, status, details, performed_by) VALUES ($1, 'WORKFLOW_ERROR', 'FAILED', $2::jsonb, 'system')",
+        "options": {
+          "queryReplacement": "={{ $json.hireId }},{{ JSON.stringify({ workflow: $json.workflowName, error: $json.errorMessage, execution_id: $json.executionId, timestamp: $json.timestamp }) }}",
+          "queryBatching": "single"
+        }
+      },
+      "id": "a0000005-0000-0000-0000-000000000001",
+      "name": "Postgres — Insert FAILED Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [900, 200],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      }
     },
     {
       "parameters": {
@@ -36,7 +86,7 @@
       "name": "Slack — Post Error Alert",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.2,
-      "position": [650, 300],
+      "position": [1150, 300],
       "credentials": {
         "slackApi": {
           "id": "[SLACK_CREDENTIAL_ID]",
@@ -58,6 +108,35 @@
       ]
     },
     "Parse Error Context": {
+      "main": [
+        [
+          {
+            "node": "Check — hire_id Present?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check — hire_id Present?": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert FAILED Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack — Post Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert FAILED Event": {
       "main": [
         [
           {

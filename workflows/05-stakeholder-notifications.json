@@ -66,11 +66,21 @@
       }
     },
     {
+      "id": "a5000012-0000-0000-0000-000000000001",
+      "name": "Resolve Manager Slack ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\nlet manager_slack_id = hire.company_config?.hr_rep_slack_id || '';  // default fallback\ntry {\n  const resp = await fetch(`https://slack.com/api/users.lookupByEmail?email=${encodeURIComponent(hire.manager_email)}`, {\n    headers: { 'Authorization': 'Bearer [SLACK_BOT_TOKEN]' }\n  });\n  const d = await resp.json();\n  if (d.ok && d.user?.id) manager_slack_id = d.user.id;\n} catch (_) { /* use fallback */ }\nreturn [{ json: { ...hire, manager_slack_id } }];"
+      }
+    },
+    {
       "id": "a5000006-0000-0000-0000-000000000001",
       "name": "Gmail — Welcome to Hire",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
-      "position": [1250, 100],
+      "position": [1500, 100],
       "onError": "continueRegularOutput",
       "credentials": {
         "gmailOAuth2": {
@@ -93,10 +103,10 @@
     },
     {
       "id": "a5000007-0000-0000-0000-000000000001",
-      "name": "Slack — DM Manager",
+      "name": "Slack — DM Manager (or HR fallback)",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
-      "position": [1250, 280],
+      "position": [1500, 280],
       "onError": "continueRegularOutput",
       "credentials": {
         "slackApi": {
@@ -111,7 +121,7 @@
         "user": {
           "__rl": true,
           "mode": "id",
-          "value": "={{ $json.company_config.hr_rep_slack_id }}"
+          "value": "={{ $json.manager_slack_id }}"
         },
         "text": "={{ $json.manager_slack_msg }}",
         "otherOptions": {}
@@ -122,7 +132,7 @@
       "name": "Slack — IT Channel",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
-      "position": [1250, 460],
+      "position": [1500, 460],
       "onError": "continueRegularOutput",
       "credentials": {
         "slackApi": {
@@ -148,7 +158,7 @@
       "name": "Slack — Finance/HR Channel",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
-      "position": [1250, 640],
+      "position": [1500, 640],
       "onError": "continueRegularOutput",
       "credentials": {
         "slackApi": {
@@ -170,13 +180,25 @@
       }
     },
     {
+      "id": "a5000013-0000-0000-0000-000000000001",
+      "name": "Merge — Wait for All 4 Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1750, 370],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      }
+    },
+    {
       "id": "a5000010-0000-0000-0000-000000000001",
-      "name": "Collect + Execute 06",
+      "name": "Build Notification Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1500, 300],
+      "position": [1950, 370],
       "parameters": {
-        "jsCode": "const hire = $('Parse Email + Fan Out').item.json;\nreturn [{ json: { ...hire, notification_results: { welcome_email_sent: true, manager_notified: true, it_notified: true, finance_hr_notified: true } } }];"
+        "jsCode": "// Collect all branch outputs from the Merge node\n// Each branch passes its output (or empty on continueRegularOutput error)\nconst allItems = $input.all();\n\n// Identify which branches produced output by checking what fields are present\n// We use the first item that has hire data as the canonical hire record\nconst hireItem = allItems.find(i => i.json.hire_id) || allItems[0];\nconst hire = hireItem?.json || {};\n\n// Build notification_results based on which branches actually produced output\n// A branch that errored with continueRegularOutput still passes data, but the\n// sending node will not have completed successfully — check for node-level signals\n// Since all 4 nodes have onError: continueRegularOutput, all branches emit output.\n// Track per-channel result by checking if the data contains expected response fields.\nconst notification_results = {\n  welcome_email_sent:    allItems.some(i => i.json.threadId || i.json.labelIds || i.json.id),\n  manager_notified:      allItems.some(i => i.json.channel && i.json.ts),\n  it_notified:           allItems.filter(i => i.json.channel && i.json.ts).length >= 2,\n  finance_hr_notified:   allItems.filter(i => i.json.channel && i.json.ts).length >= 3\n};\n\nreturn [{ json: { ...hire, notification_results } }];"
       }
     },
     {
@@ -184,7 +206,7 @@
       "name": "Execute — 06 ClickUp Checklist",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
-      "position": [1700, 300],
+      "position": [2150, 370],
       "parameters": {
         "workflowId": {
           "__rl": true,
@@ -229,8 +251,15 @@
     "Parse Email + Fan Out": {
       "main": [
         [
+          { "node": "Resolve Manager Slack ID", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Resolve Manager Slack ID": {
+      "main": [
+        [
           { "node": "Gmail — Welcome to Hire", "type": "main", "index": 0 },
-          { "node": "Slack — DM Manager", "type": "main", "index": 0 },
+          { "node": "Slack — DM Manager (or HR fallback)", "type": "main", "index": 0 },
           { "node": "Slack — IT Channel", "type": "main", "index": 0 },
           { "node": "Slack — Finance/HR Channel", "type": "main", "index": 0 }
         ]
@@ -239,32 +268,39 @@
     "Gmail — Welcome to Hire": {
       "main": [
         [
-          { "node": "Collect + Execute 06", "type": "main", "index": 0 }
+          { "node": "Merge — Wait for All 4 Branches", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Slack — DM Manager": {
+    "Slack — DM Manager (or HR fallback)": {
       "main": [
         [
-          { "node": "Collect + Execute 06", "type": "main", "index": 1 }
+          { "node": "Merge — Wait for All 4 Branches", "type": "main", "index": 1 }
         ]
       ]
     },
     "Slack — IT Channel": {
       "main": [
         [
-          { "node": "Collect + Execute 06", "type": "main", "index": 2 }
+          { "node": "Merge — Wait for All 4 Branches", "type": "main", "index": 2 }
         ]
       ]
     },
     "Slack — Finance/HR Channel": {
       "main": [
         [
-          { "node": "Collect + Execute 06", "type": "main", "index": 3 }
+          { "node": "Merge — Wait for All 4 Branches", "type": "main", "index": 3 }
         ]
       ]
     },
-    "Collect + Execute 06": {
+    "Merge — Wait for All 4 Branches": {
+      "main": [
+        [
+          { "node": "Build Notification Results", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Notification Results": {
       "main": [
         [
           { "node": "Execute — 06 ClickUp Checklist", "type": "main", "index": 0 }
