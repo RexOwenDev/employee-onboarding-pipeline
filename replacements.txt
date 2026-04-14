@@ -1,0 +1,526 @@
+################################################################################
+# replacements.txt — Employee Onboarding Pipeline
+# Placeholder-to-credential mapping worksheet
+# Generated: 2026-04-15
+################################################################################
+#
+# PURPOSE
+#   Every [PLACEHOLDER] token in workflows/*.json must be replaced with a real
+#   value before the pipeline will run.  This file is the authoritative guide
+#   that tells an implementer what each token means, where it appears, and
+#   exactly how to obtain the value.
+#
+# HOW TO USE
+#   1. Import 00-error-handler.json first and note its n8n workflow ID.
+#   2. Work through each section below in order (top to bottom).
+#   3. For each entry, obtain the value, then do a global find-and-replace of
+#      the [PLACEHOLDER] token across all workflow JSONs BEFORE importing.
+#   4. Create n8n credentials before importing workflows that reference them.
+#   5. Set all environment variables (Section 1) in n8n Settings → Variables
+#      BEFORE activating any workflow.
+#
+# SAFETY RULES
+#   - NEVER commit real values to git. This file contains placeholders only.
+#   - Store secrets in n8n Settings → Variables, not in workflow node fields.
+#   - Treat BAMBOOHR_HMAC_SECRET and GSUITE_SERVICE_ACCOUNT_JSON as
+#     high-sensitivity credentials — rotate immediately if exposed.
+#   - Workflow IDs are not secret, but keep your n8n instance URL private.
+#
+################################################################################
+
+
+################################################################################
+# SECTION 1 — ENVIRONMENT VARIABLES
+# Set these in n8n Settings → Variables (not inside workflow nodes).
+# Referenced via $env['VAR_NAME'] in Code nodes.
+################################################################################
+
+# ── NOTE ──────────────────────────────────────────────────────────────────────
+# The following four variables are consumed via $env['...'] in Code nodes and
+# do NOT appear as [BRACKET] tokens in the JSON. They are mandatory.
+# Omitting any of these will cause runtime errors in the Code nodes that
+# reference them.
+# ──────────────────────────────────────────────────────────────────────────────
+
+BAMBOOHR_HMAC_SECRET
+  Value:  HMAC-SHA256 secret from BambooHR Settings → Webhooks
+  Where:  $env['BAMBOOHR_HMAC_SECRET'] in 01-hris-intake-bamboohr.json → Code node
+          "Verify HMAC + Normalize Payload"
+  How to get: BambooHR → Settings → Webhooks → create or view webhook → copy
+              the Secret field (shown only once at creation time; regenerate if lost)
+  Note:   Store ONLY in n8n Settings → Variables. If you hardcode this in a
+          node field it will appear in execution logs in plain text.
+
+GSUITE_SERVICE_ACCOUNT_JSON
+  Value:  Full JSON content of the Google service account key file
+  Where:  $env['GSUITE_SERVICE_ACCOUNT_JSON'] in 04-account-provisioning.json →
+          Code node "Provision All Accounts" (GSuite section)
+  How to get: Google Cloud Console → IAM & Admin → Service Accounts →
+              select your service account → Keys → Add Key → JSON →
+              copy the entire file content as a single-line JSON string
+  Note:   The service account must have domain-wide delegation enabled and the
+          scope https://www.googleapis.com/auth/admin.directory.user granted in
+          Google Admin → Security → API Controls → Domain-wide delegation.
+
+GSUITE_ADMIN_EMAIL
+  Value:  Email address of a Google Workspace super-admin
+          (e.g., admin@yourcompany.com)
+  Where:  $env['GSUITE_ADMIN_EMAIL'] in 04-account-provisioning.json →
+          Code node "Provision All Accounts" (GSuite JWT assertion)
+  How to get: Google Admin Console → Account → Admin Roles → Super Admin →
+              note the primary email of the admin account used for impersonation
+  Note:   The service account JWT will impersonate this address. The account
+          must remain active; deactivating it breaks GSuite provisioning.
+
+
+################################################################################
+# SECTION 2 — n8n WORKFLOW IDs
+# Assigned by n8n after import. These are circular references — each workflow
+# calls others by ID. Import order matters (see import instructions in README).
+#
+# How to get any workflow ID:
+#   1. Import the workflow JSON into n8n.
+#   2. Open the workflow in the n8n editor.
+#   3. Copy the numeric or UUID string from the URL bar
+#      (e.g., https://your-instance.app.n8n.cloud/workflow/1234567890abcdef).
+#   4. That string is the workflow ID.
+#
+# Import order: 00 → 08 → 07b → 07 → 06 → 05 → 04 → 03 → 02 → 01
+# (import dependents before the workflows that call them)
+################################################################################
+
+[00_ERROR_HANDLER_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 00-error-handler after import
+  Where:  settings.errorWorkflow in ALL 9 other workflow JSON files
+          (01, 02, 03, 04, 05, 06, 07, 07b, 08)
+  How to get: Import 00-error-handler.json first → copy ID from URL bar →
+              replace this placeholder across all other JSONs before importing them
+
+[02_ROLE_CLASSIFIER_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 02-role-classifier after import
+  Where:  01-hris-intake-bamboohr.json → "Execute Workflow" node (calls 02)
+  How to get: Import 02-role-classifier.json → copy ID from URL bar
+
+[03_IT_APPROVAL_GATE_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 03-it-approval-gate after import
+  Where:  02-role-classifier.json → "Execute Workflow" node (calls 03)
+  How to get: Import 03-it-approval-gate.json → copy ID from URL bar
+
+[04_ACCOUNT_PROVISIONING_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 04-account-provisioning after import
+  Where:  03-it-approval-gate.json → "Execute Workflow" node (calls 04)
+  How to get: Import 04-account-provisioning.json → copy ID from URL bar
+
+[05_STAKEHOLDER_NOTIFICATIONS_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 05-stakeholder-notifications after import
+  Where:  04-account-provisioning.json → "Execute Workflow" node (calls 05)
+  How to get: Import 05-stakeholder-notifications.json → copy ID from URL bar
+
+[06_CLICKUP_CHECKLIST_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 06-clickup-checklist after import
+  Where:  05-stakeholder-notifications.json → "Execute Workflow" node (calls 06)
+  How to get: Import 06-clickup-checklist.json → copy ID from URL bar
+
+[07_CHECKIN_SCHEDULER_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 07-checkin-scheduler after import
+  Where:  06-clickup-checklist.json → "Execute Workflow" node (calls 07)
+  How to get: Import 07-checkin-scheduler.json → copy ID from URL bar
+
+[08_AUDIT_LOG_WORKFLOW_ID]
+  Value:  n8n workflow ID assigned to 08-audit-log after import
+  Where:  07-checkin-scheduler.json → "Execute Workflow" node (calls 08)
+  How to get: Import 08-audit-log.json → copy ID from URL bar
+
+
+################################################################################
+# SECTION 3 — n8n CREDENTIAL IDs
+# n8n assigns a numeric credential ID when you save a credential.
+# The ID appears in the URL when viewing the credential:
+#   https://your-instance.app.n8n.cloud/credentials/12345
+# The name is whatever you type in the "Name" field when creating it.
+# Both ID and Name must match exactly what is stored in n8n Credentials.
+################################################################################
+
+[POSTGRES_CREDENTIAL_ID]
+  Value:  Numeric ID of the Postgres credential in n8n
+          (e.g., "12345" — digits only, no quotes in JSON)
+  Where:  credentials.postgres.id in Postgres nodes across:
+          01-hris-intake-bamboohr, 02-role-classifier, 03-it-approval-gate,
+          04-account-provisioning, 06-clickup-checklist, 07-checkin-scheduler
+  How to get: n8n → Credentials → New → Postgres → fill in Supabase connection
+              details (host, port 5432, database, user, password, SSL=true) →
+              Save → copy the numeric ID from the URL bar
+
+[POSTGRES_CREDENTIAL_NAME]
+  Value:  Display name of the Postgres credential in n8n
+          (e.g., "Supabase Onboarding DB" — must match exactly)
+  Where:  credentials.postgres.name in all Postgres nodes (same files as above)
+  How to get: Same credential creation step above — use whatever name you entered
+              in the Name field
+
+[SLACK_CREDENTIAL_ID]
+  Value:  Numeric ID of the Slack credential in n8n
+  Where:  credentials.slack.id in Slack nodes across:
+          00-error-handler, 03-it-approval-gate, 05-stakeholder-notifications
+  How to get: n8n → Credentials → New → Slack → OAuth2 flow with your Slack Bot
+              Token → Save → copy ID from URL bar
+
+[SLACK_CREDENTIAL_NAME]
+  Value:  Display name of the Slack credential in n8n
+  Where:  credentials.slack.name in all Slack nodes (same files as above)
+  How to get: Same step above — the name you entered for the Slack credential
+
+[GMAIL_CREDENTIAL_ID]
+  Value:  Numeric ID of the Gmail credential in n8n
+  Where:  credentials.gmail.id in Gmail node in 05-stakeholder-notifications
+  How to get: n8n → Credentials → New → Gmail → OAuth2 flow with Google account
+              that has send-mail permission → Save → copy ID from URL bar
+
+[GMAIL_CREDENTIAL_NAME]
+  Value:  Display name of the Gmail credential in n8n
+  Where:  credentials.gmail.name in 05-stakeholder-notifications Gmail node
+  How to get: Same step above — the name you entered for the Gmail credential
+
+[GOOGLE_SHEETS_CREDENTIAL_ID]
+  Value:  Numeric ID of the Google Sheets credential in n8n
+  Where:  credentials.googleSheets.id in 08-audit-log "Append Audit Row" node
+  How to get: n8n → Credentials → New → Google Sheets → OAuth2 flow →
+              Save → copy ID from URL bar
+
+[GOOGLE_SHEETS_CREDENTIAL_NAME]
+  Value:  Display name of the Google Sheets credential in n8n
+  Where:  credentials.googleSheets.name in 08-audit-log Google Sheets node
+  How to get: Same step above — the name you entered for the Google Sheets
+              credential
+
+
+################################################################################
+# SECTION 4 — SLACK CONFIGURATION
+################################################################################
+
+[SLACK_BOT_TOKEN]
+  Value:  Slack Bot OAuth token (starts with xoxb-)
+          (e.g., xoxb-EXAMPLE-TOKEN-PLACEHOLDER)
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (Slack invite call, Authorization header)
+          07b-checkin-runner.json → Code node "Send Check-in Messages"
+          (all Slack API calls, Authorization header)
+  How to get: Slack API Dashboard (api.slack.com/apps) → your app →
+              OAuth & Permissions → Bot Token Scopes (requires: users:write,
+              users.profile:read, chat:write, chat:write.public) →
+              Install to Workspace → copy Bot User OAuth Token
+
+[SLACK_HR_OPS_CHANNEL_ID]
+  Value:  Slack channel ID for the main HR Ops channel
+          (e.g., C01234ABCDE — NOT the channel name, the ID)
+  Where:  07b-checkin-runner.json → Code node "Send Check-in Messages"
+          (DAY_30 branch: chat.postMessage target)
+  How to get: Open the channel in Slack → right-click channel name →
+              View channel details → scroll to bottom → copy Channel ID
+              (or: hover channel name in browser, copy ID from URL)
+
+[SLACK_HR_OPS_ALERTS_CHANNEL_ID]
+  Value:  Slack channel ID for the HR Ops alerts channel (for error notifications)
+          (e.g., C09876ZYXWV)
+  Where:  00-error-handler.json → Slack node that posts error alerts
+  How to get: Same procedure as SLACK_HR_OPS_CHANNEL_ID but for the alerts
+              channel (can be the same channel or a separate #alerts channel)
+
+
+################################################################################
+# SECTION 5 — ANTHROPIC / CLAUDE
+################################################################################
+
+[ANTHROPIC_API_KEY]
+  Value:  Anthropic API key (starts with sk-ant-)
+          (e.g., sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)
+  Where:  02-role-classifier.json → HTTP Request node calling Claude API
+          05-stakeholder-notifications.json → HTTP Request node (email draft)
+          07b-checkin-runner.json → Code node "Send Check-in Messages"
+          (fetch call to https://api.anthropic.com/v1/messages)
+  How to get: https://console.anthropic.com → API Keys → Create Key →
+              copy immediately (shown only once)
+  Note:   Store in n8n Settings → Variables as ANTHROPIC_API_KEY, OR replace
+          the token in the HTTP header field. If using $env[], add it as a
+          variable. Model used: claude-haiku-4-5-20251001 (verify still current).
+
+
+################################################################################
+# SECTION 6 — GOOGLE ADMIN SDK / GSUITE
+# (Environment variables — see Section 1 for GSUITE_SERVICE_ACCOUNT_JSON
+#  and GSUITE_ADMIN_EMAIL. This section covers the remaining GSuite config.)
+################################################################################
+
+[EMAIL_DOMAIN]
+  Value:  Your company's Google Workspace domain (e.g., yourcompany.com)
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (builds work email: firstname.lastname@[EMAIL_DOMAIN])
+  How to get: This is your organization's primary Google Workspace domain.
+              Confirm in Google Admin Console → Account → Domains.
+  Note:   Do NOT include @ or https:// — just the bare domain string.
+
+
+################################################################################
+# SECTION 7 — NOTION
+################################################################################
+
+[NOTION_INTEGRATION_TOKEN]
+  Value:  Notion internal integration token (starts with secret_)
+          (e.g., secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (Notion API call: Authorization header)
+  How to get: https://www.notion.so/my-integrations → New Integration →
+              name it (e.g., "Onboarding Pipeline") → Submit →
+              copy Internal Integration Token
+  Note:   You must also share the target Notion page/database with the
+          integration: open the page → ... menu → Connections → add integration.
+          The NOTION_INTEGRATION_TOKEN grants access only to explicitly shared
+          pages.
+
+
+################################################################################
+# SECTION 8 — CLICKUP
+################################################################################
+
+[CLICKUP_API_TOKEN]
+  Value:  ClickUp personal API token (starts with pk_)
+          (e.g., pk_11111111_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX)
+  Where:  06-clickup-checklist.json → HTTP Request nodes "Create Folder" and
+          "Create List" (Authorization header)
+          06-clickup-checklist.json → Code node "Create All Tasks"
+          (Authorization header in fetch calls)
+  How to get: ClickUp → Profile avatar (bottom-left) → Settings → Apps →
+              API Token → copy token
+
+[CLICKUP_SPACE_ID]
+  Value:  Numeric ID of the ClickUp Space where onboarding folders will be created
+          (e.g., "90123456789")
+  Where:  06-clickup-checklist.json → HTTP Request node "Create Folder"
+          (URL: https://api.clickup.com/api/v2/space/[CLICKUP_SPACE_ID]/folder)
+  How to get: ClickUp → navigate to the Space → right-click Space name →
+              "Copy link" → extract the numeric ID from the URL
+              (e.g., app.clickup.com/t/90123456789/... → ID is "90123456789")
+              OR: ClickUp API GET /api/v2/team/{team_id}/space to list spaces
+
+[CLICKUP_HIRE_USER_ID]
+  Value:  ClickUp user ID of the new hire's ClickUp account
+          (e.g., "12345678" — numeric string)
+  Where:  06-clickup-checklist.json → Code node "Build Tasks + Folder Name"
+          (assigneeMap.hire — tasks assigned to the new hire)
+  How to get: ClickUp API: GET https://api.clickup.com/api/v2/team/{teamId}/member
+              with Authorization: pk_... header → find user by email → copy id
+  Note:   This ID must be updated per new hire at runtime if you want tasks
+          assigned to the actual hire. The current implementation uses a static
+          placeholder — for dynamic assignment, update the Code node logic to
+          look up the hire's ClickUp user by email at runtime.
+
+[CLICKUP_MANAGER_USER_ID]
+  Value:  ClickUp user ID of the new hire's manager
+          (e.g., "87654321")
+  Where:  06-clickup-checklist.json → Code node "Build Tasks + Folder Name"
+          (assigneeMap.manager — tasks assigned to the manager)
+  How to get: Same API call as CLICKUP_HIRE_USER_ID — find manager by email
+
+[CLICKUP_IT_REP_USER_ID]
+  Value:  ClickUp user ID of the IT representative
+          (e.g., "11112222")
+  Where:  06-clickup-checklist.json → Code node "Build Tasks + Folder Name"
+          (assigneeMap.it_rep — IT-related tasks)
+  How to get: Same API call — find IT rep by email
+
+[CLICKUP_HR_REP_USER_ID]
+  Value:  ClickUp user ID of the HR representative
+          (e.g., "33334444")
+  Where:  06-clickup-checklist.json → Code node "Build Tasks + Folder Name"
+          (assigneeMap.hr_rep — HR-related tasks and fallback assignee)
+  How to get: Same API call — find HR rep by email
+
+
+################################################################################
+# SECTION 9 — GOOGLE SHEETS (AUDIT LOG)
+################################################################################
+
+[AUDIT_GOOGLE_SHEET_ID]
+  Value:  Google Sheets spreadsheet ID for the audit log
+          (e.g., "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms")
+  Where:  08-audit-log.json → Google Sheets node "Append Audit Row"
+          (documentId field)
+  How to get: Open the Google Sheet in a browser → copy the long alphanumeric
+              string from the URL between /spreadsheets/d/ and /edit
+              (e.g., docs.google.com/spreadsheets/d/[THIS_PART]/edit)
+  Note:   The sheet must be shared with the Google account used by the Google
+          Sheets credential in n8n. Required columns (in order): hire_id,
+          full_name, job_title, department, employment_type, start_date,
+          role_group, provisioning_status, tools_provisioned, pipeline_started_at,
+          completed_at, notes.
+
+
+################################################################################
+# SECTION 10 — COMPANY CONFIG
+################################################################################
+
+[COMPANY_NAME]
+  Value:  Your company's display name as it should appear in outbound emails
+          (e.g., "Acme Corp" or "Acme Corporation")
+  Where:  05-stakeholder-notifications.json →
+          - Code node "Build Email Prompt + Notification Payloads"
+            (injected into the Claude prompt: "Company: [COMPANY_NAME]")
+          - Code node "Parse Claude Response + Build Final Email"
+            (fallback subject line: "Welcome to [COMPANY_NAME], {firstName}!")
+          - Gmail node (senderName: "[COMPANY_NAME] People Team")
+  How to get: Use the exact legal or brand name you want new hires to see in
+              their welcome email subject line and sender name.
+  Note:   This appears verbatim in email subjects. Keep it short and consistent
+          (e.g., don't mix "Acme" and "Acme Corporation" across runs).
+
+
+################################################################################
+# SECTION 11 — BAMBOOHR WEBHOOK
+################################################################################
+
+[BAMBOOHR_WEBHOOK_ID]
+  Value:  UUID that n8n assigns to the BambooHR Webhook trigger node
+          (e.g., "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+  Where:  01-hris-intake-bamboohr.json → Webhook trigger node (webhookId field)
+  How to get: This ID is pre-set in the JSON but will be reassigned by n8n on
+              import. After importing 01-hris-intake-bamboohr.json, open the
+              workflow, click the Webhook node, and copy the generated webhook
+              URL shown in the node panel. The UUID at the end of the path is
+              the webhookId.
+              Then configure BambooHR to POST to:
+              https://your-instance.app.n8n.cloud/webhook/[this-uuid]
+  Note:   BambooHR → Settings → Webhooks → Add Webhook → URL = the n8n webhook
+          URL → Event = "Employee Created" (or "Employment Status Changed") →
+          Secret = your BAMBOOHR_HMAC_SECRET value.
+
+
+################################################################################
+# SECTION 12 — INSTANCE CONFIG
+################################################################################
+
+[INSTANCE_ID]
+  Value:  Your n8n instance ID (displayed in n8n Settings → About n8n)
+          (e.g., "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
+  Where:  01-hris-intake-bamboohr.json → settings.instanceId
+  How to get: n8n → Settings (gear icon, bottom-left) → About n8n →
+              copy the Instance ID string
+  Note:   This is a metadata field used for telemetry/debugging. Leaving it as
+          the placeholder will not break functionality but will cause a warning
+          in n8n's workflow settings panel.
+
+[CLIENT_SLUG]
+  Value:  Short alphanumeric identifier for this client deployment
+          (e.g., "acme", "techcorp", "widgets-inc" — lowercase, no spaces)
+  Where:  01-hris-intake-bamboohr.json → Code node "Verify HMAC + Normalize Payload"
+          (client_slug field in canonical NewHirePayload, also read from
+          $env['CLIENT_SLUG'] with this token as fallback)
+  How to get: Choose a short slug that identifies this client in Postgres audit
+              records. Set the same value in n8n Settings → Variables as
+              CLIENT_SLUG so the $env reference works correctly.
+  Note:   This slug is written into the Postgres onboarding_events table on
+          every hire record. Keep it consistent — changing it mid-deployment
+          will create orphaned records with mixed slugs.
+
+
+################################################################################
+# SECTION 13 — CONDITIONAL TOOL ADAPTERS
+# These placeholders appear as error-throwing stub strings in 04-account-
+# provisioning.json. They are NOT real credentials — they are reminder tokens
+# that tell the implementer which adapters need to be built before that tool
+# integration goes live.
+#
+# To activate a tool: replace the throw statement stub with real API logic,
+# following the SETUP.md §4.x guide for each tool.
+################################################################################
+
+[GITHUB_ADAPTER]
+  Value:  Stub marker — replace with real GitHub provisioning logic
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (conditionalTools switch, case 'github')
+  How to get: Not a credential value. To implement:
+              1. Create a GitHub App or use a Personal Access Token (PAT) with
+                 admin:org scope stored in n8n Settings → Variables as
+                 GITHUB_PAT or GITHUB_APP_PRIVATE_KEY.
+              2. Replace the throw line with:
+                 await fetch('https://api.github.com/orgs/{org}/invitations', ...)
+              3. See SETUP.md §4.1 for the full adapter template.
+  Note:   Until implemented, GitHub provisioning will fail-safe: the error is
+          caught by the per-service isolation wrapper and logged as FAILED
+          without stopping the rest of the pipeline.
+
+[LINEAR_ADAPTER]
+  Value:  Stub marker — replace with real Linear provisioning logic
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (conditionalTools switch, case 'linear')
+  How to get: Not a credential value. To implement:
+              1. Obtain a Linear API key from linear.app → Settings → API →
+                 Personal API Keys → Create key.
+              2. Store as LINEAR_API_KEY in n8n Settings → Variables.
+              3. Replace the throw line with a GraphQL mutation to
+                 https://api.linear.app/graphql (inviteUser or createOrganizationInvite).
+              4. See SETUP.md §4.2 for the full adapter template.
+
+[HUBSPOT_ADAPTER]
+  Value:  Stub marker — replace with real HubSpot provisioning logic
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (conditionalTools switch, case 'hubspot')
+  How to get: Not a credential value. To implement:
+              1. Create a HubSpot Private App with CRM → Users scope at
+                 app.hubspot.com → Settings → Integrations → Private Apps.
+              2. Store access token as HUBSPOT_ACCESS_TOKEN in n8n Variables.
+              3. Replace the throw line with a POST to
+                 https://api.hubapi.com/settings/v3/users
+              4. See SETUP.md §4.3 for the full adapter template.
+
+[CANVA_ADAPTER]
+  Value:  Stub marker — replace with real Canva provisioning logic
+  Where:  04-account-provisioning.json → Code node "Provision All Accounts"
+          (conditionalTools switch, case 'canva')
+  How to get: Not a credential value. To implement:
+              1. Canva does not have a public user-provisioning API as of 2026.
+                 Provisioning is typically done via SCIM if your org has Canva
+                 for Teams with SSO/SCIM enabled.
+              2. If SCIM is available: store SCIM token as CANVA_SCIM_TOKEN in
+                 n8n Variables and POST to your Canva SCIM endpoint.
+              3. See SETUP.md §4.4 for the stub-to-SCIM adapter template.
+
+
+################################################################################
+# SECTION 14 — CHECK-IN DAY MARKERS
+# [DAY_14] and [DAY_30] appear in console.log() statements in 07b-checkin-
+# runner.json as labels for log output, not as substitutable config values.
+# They are included here for completeness since grep detects them as
+# [BRACKET] tokens.
+################################################################################
+
+[DAY_14]
+  Value:  No substitution required — this is a console.log label string
+  Where:  07b-checkin-runner.json → Code node "Send Check-in Messages"
+          (console.log('[DAY_14] Would send Gmail to ...'))
+  How to get: No action needed. The string "[DAY_14]" is intentional log output
+              to identify Day 14 actions in n8n execution logs during debugging.
+  Note:   If you prefer clean logs, you can replace with a descriptive string
+          (e.g., "DAY_14") but functional behavior is unaffected.
+
+[DAY_30]
+  Value:  No substitution required — this is a console.log label string
+  Where:  07b-checkin-runner.json → Code node "Send Check-in Messages"
+          (console.log('[DAY_30] Gmail review initiation to ...'))
+  How to get: No action needed. Same rationale as [DAY_14] above.
+  Note:   The Day 30 Slack message uses [SLACK_HR_OPS_CHANNEL_ID] (see Section
+          4) — that IS a real credential replacement required.
+
+
+################################################################################
+# VERIFICATION CHECKLIST
+# After replacing all tokens, run this command to confirm zero remaining
+# bracket-style placeholders in your workflow JSONs:
+#
+#   grep -ohE '\[[A-Z_][A-Z0-9_]*\]' workflows/*.json | sort -u
+#
+# Expected output after full replacement: (empty)
+#
+# Additionally confirm environment variables are set:
+#   n8n Settings → Variables → verify BAMBOOHR_HMAC_SECRET, CLIENT_SLUG,
+#   GSUITE_SERVICE_ACCOUNT_JSON, GSUITE_ADMIN_EMAIL are all present.
+################################################################################
