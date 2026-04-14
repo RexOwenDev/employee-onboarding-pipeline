@@ -1,0 +1,98 @@
+title = "Rex's n8n + Portfolio Gitleaks Rules"
+
+# Extend gitleaks default ruleset (catches AWS keys, Stripe, Slack tokens, GitHub tokens, etc.)
+[extend]
+useDefault = true
+
+# ─── Custom rules for patterns the defaults miss ──────────────────────────────
+
+[[rules]]
+id = "n8n-api-jwt"
+description = "n8n public-api JWT (HS256, contains 'aud:public-api')"
+# Matches JWTs where the base64-decoded payload claims audience 'public-api' (n8n convention)
+# The full pattern is: header.payload.signature where payload base64 contains aud:public-api
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*cHVibGljLWFwaQ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{10,}'''
+tags = ["jwt", "n8n", "critical"]
+
+[[rules]]
+id = "generic-signed-jwt"
+description = "Generic signed JWT (3-part base64, header starts with 'eyJ')"
+# Catch-all for any JWT token — flags for human review
+regex = '''eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}'''
+tags = ["jwt"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic Claude API key"
+regex = '''sk-ant-[a-zA-Z0-9_-]{32,}'''
+tags = ["anthropic", "api-key"]
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key"
+regex = '''sk-(?:proj-)?[a-zA-Z0-9_-]{40,}'''
+tags = ["openai", "api-key"]
+
+[[rules]]
+id = "supabase-service-role-key"
+description = "Supabase service role JWT (grants bypass-RLS access — CRITICAL if leaked)"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*c2VydmljZV9yb2xl[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{10,}'''
+tags = ["supabase", "critical"]
+
+[[rules]]
+id = "cohere-api-key"
+description = "Cohere API key"
+regex = '''[a-zA-Z0-9]{40,45}'''
+path = '''(?i)\.env|cohere'''
+tags = ["cohere", "api-key"]
+
+[[rules]]
+id = "resend-api-key"
+description = "Resend API key"
+regex = '''re_[a-zA-Z0-9_-]{20,}'''
+tags = ["resend", "api-key"]
+
+[[rules]]
+id = "pdfco-api-key"
+description = "PDF.co API key (typically email:key format in x-api-key header)"
+regex = '''[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}_[a-zA-Z0-9]{40,}'''
+tags = ["pdfco", "api-key"]
+
+# ─── Allowlist: patterns that look like secrets but are fine ──────────────────
+
+[allowlist]
+description = "Known non-secret patterns"
+
+paths = [
+    '''\.env\.example$''',
+    '''.*/tests/fixtures/.*''',
+    '''.*/__mocks__/.*''',
+    '''.*/node_modules/.*''',
+    '''.*/\.next/.*''',
+    '''.*/dist/.*''',
+    '''docs/.*\.(jpg|png|svg|jpeg)$''',
+    '''.*package-lock\.json$''',
+]
+
+# Allowlist specific strings that are documented placeholders
+regexes = [
+    '''\[ANTHROPIC_API_KEY\]''',
+    '''\[OPENAI_API_KEY\]''',
+    '''\[POSTGRES_CREDENTIAL_ID\]''',
+    '''\[SLACK_[A-Z_]+\]''',
+    '''\[CLICKUP_[A-Z_]+\]''',
+    '''\[GMAIL_[A-Z_]+\]''',
+    '''\[GSUITE_[A-Z_]+\]''',
+    '''\[NOTION_[A-Z_]+\]''',
+    '''\[BAMBOOHR_[A-Z_]+\]''',
+    '''\[TYPEFORM_[A-Z_]+\]''',
+    '''\[HUBSPOT_[A-Z_]+\]''',
+    '''\[LINEAR_[A-Z_]+\]''',
+    '''\[CANVA_[A-Z_]+\]''',
+    '''\[GITHUB_[A-Z_]+\]''',
+    '''\[COMPANY_[A-Z_]+\]''',
+    '''\[CLIENT_[A-Z_]+\]''',
+    '''xoxb-YOUR_TOKEN''',
+    '''sk-ant-YOUR_KEY''',
+    '''sk-YOUR_KEY''',
+]

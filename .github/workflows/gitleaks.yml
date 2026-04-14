@@ -1,0 +1,33 @@
+name: gitleaks
+
+# Runs on every push to any branch + every PR. Catches secrets BEFORE they reach the default branch
+# even if a commit was pushed to a topic branch. Uses a custom ruleset at .gitleaks.toml.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code (full history for historical scan on PRs)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # GITHUB_TOKEN is provided automatically for public repos
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Point at our custom config (or remove this line to use gitleaks defaults only)
+          GITLEAKS_CONFIG: .gitleaks.toml
