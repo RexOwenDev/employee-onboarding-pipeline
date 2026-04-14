@@ -77,6 +77,16 @@
       }
     },
     {
+      "id": "a6000010-0000-0000-0000-000000000001",
+      "name": "Check Folder Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nif (!resp.id) {\n  throw new Error(`ClickUp folder creation failed: ${JSON.stringify(resp).substring(0, 200)}`);\n}\nreturn [{ json: resp }];"
+      }
+    },
+    {
       "id": "a6000006-0000-0000-0000-000000000001",
       "name": "ClickUp — Create List in Folder",
       "type": "n8n-nodes-base.httpRequest",
@@ -181,6 +191,13 @@
       ]
     },
     "ClickUp — Create Folder": {
+      "main": [
+        [
+          { "node": "Check Folder Created", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Folder Created": {
       "main": [
         [
           { "node": "ClickUp — Create List in Folder", "type": "main", "index": 0 }
