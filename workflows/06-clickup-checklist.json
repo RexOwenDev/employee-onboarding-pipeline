@@ -1,0 +1,217 @@
+{
+  "name": "06 — ClickUp Checklist",
+  "nodes": [
+    {
+      "id": "a6000001-0000-0000-0000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a6000002-0000-0000-0000-000000000001",
+      "name": "Set Custom Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\n$execution.customData.set('hire_id', hire.hire_id);\n$execution.customData.set('full_name', hire.full_name);\n$execution.customData.set('workflow_stage', '06-clickup-checklist');\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a6000003-0000-0000-0000-000000000001",
+      "name": "Postgres — Load Task Templates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [650, 300],
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "SELECT ot.* FROM onboarding_templates ot JOIN company_config cc ON ot.client_id = cc.id WHERE cc.slug = $1 AND (ot.role_group = $2 OR ot.role_group = 'ALL') ORDER BY ot.due_offset_days ASC",
+        "options": {
+          "queryReplacement": "={{ $json.client_slug }},{{ $json.role_group }}",
+          "queryBatching": "single"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      }
+    },
+    {
+      "id": "a6000004-0000-0000-0000-000000000001",
+      "name": "Build Tasks + Folder Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "parameters": {
+        "jsCode": "const hire = $('Set Custom Data').item.json;\nconst templateRows = $input.all();\nconst startDate = new Date(hire.start_date);\n\n// Assignee placeholders — per-client values in SETUP.md §3\nconst assigneeMap = {\n  hire:    '[CLICKUP_HIRE_USER_ID]',\n  manager: '[CLICKUP_MANAGER_USER_ID]',\n  it_rep:  '[CLICKUP_IT_REP_USER_ID]',\n  hr_rep:  '[CLICKUP_HR_REP_USER_ID]'\n};\n\nconst priorityMap = { urgent: 1, high: 2, normal: 3, low: 4 };\n\nconst tasks = templateRows.map(row => {\n  const t = row.json;\n  const due = new Date(startDate);\n  due.setDate(due.getDate() + (t.due_offset_days || 0));\n  return {\n    name: t.task_name,\n    description: t.task_description || '',\n    due_date: due.getTime(),\n    due_date_time: false,\n    priority: priorityMap[t.priority] || 3,\n    assignees: [assigneeMap[t.assignee_type] || assigneeMap.hr_rep]\n  };\n});\n\nreturn [{ json: { ...hire, clickup_tasks: tasks, folder_name: `${hire.start_date} \u2014 ${hire.full_name} Onboarding` } }];"
+      }
+    },
+    {
+      "id": "a6000005-0000-0000-0000-000000000001",
+      "name": "ClickUp — Create Folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1050, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.clickup.com/api/v2/space/[CLICKUP_SPACE_ID]/folder",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "[CLICKUP_API_TOKEN]" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ name: $json.folder_name }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "a6000006-0000-0000-0000-000000000001",
+      "name": "ClickUp — Create List in Folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1250, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.clickup.com/api/v2/folder/' + $json.id + '/list' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "[CLICKUP_API_TOKEN]" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ name: 'Onboarding Tasks' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "a6000007-0000-0000-0000-000000000001",
+      "name": "Create All Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300],
+      "parameters": {
+        "jsCode": "const listId = $input.first().json.id;\nconst hire = $('Build Tasks + Folder Name').item.json;\nconst tasks = hire.clickup_tasks || [];\nconst createdTasks = [];\nconst errors = [];\n\nfor (const task of tasks) {\n  try {\n    const resp = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, {\n      method: 'POST',\n      headers: { 'Authorization': '[CLICKUP_API_TOKEN]', 'Content-Type': 'application/json' },\n      body: JSON.stringify(task)\n    });\n    if (resp.ok) {\n      const created = await resp.json();\n      createdTasks.push(created.id);\n    } else {\n      errors.push(`${task.name}: HTTP ${resp.status}`);\n    }\n  } catch (err) {\n    errors.push(`${task.name}: ${err.message}`);\n  }\n}\n\nreturn [{ json: { ...hire, clickup_list_id: listId, tasks_created: createdTasks.length, task_errors: errors, clickup_checklist_created: true } }];"
+      }
+    },
+    {
+      "id": "a6000008-0000-0000-0000-000000000001",
+      "name": "Postgres — Record Checklist Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1650, 300],
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO onboarding_events (hire_id, event_type, status, details, performed_by) VALUES ($1,'CHECKLIST_CREATED','SUCCESS',$2::jsonb,'system')",
+        "options": {
+          "queryReplacement": "={{ $json.hire_id }},{{ JSON.stringify({ tasks_created: $json.tasks_created, list_id: $json.clickup_list_id, errors: $json.task_errors }) }}",
+          "queryBatching": "single"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      }
+    },
+    {
+      "id": "a6000009-0000-0000-0000-000000000001",
+      "name": "Execute — 07 Check-in Scheduler",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1850, 300],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "[07_CHECKIN_SCHEDULER_WORKFLOW_ID]"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          { "node": "Set Custom Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Custom Data": {
+      "main": [
+        [
+          { "node": "Postgres — Load Task Templates", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres — Load Task Templates": {
+      "main": [
+        [
+          { "node": "Build Tasks + Folder Name", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Tasks + Folder Name": {
+      "main": [
+        [
+          { "node": "ClickUp — Create Folder", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "ClickUp — Create Folder": {
+      "main": [
+        [
+          { "node": "ClickUp — Create List in Folder", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "ClickUp — Create List in Folder": {
+      "main": [
+        [
+          { "node": "Create All Tasks", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create All Tasks": {
+      "main": [
+        [
+          { "node": "Postgres — Record Checklist Event", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres — Record Checklist Event": {
+      "main": [
+        [
+          { "node": "Execute — 07 Check-in Scheduler", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
