@@ -1,0 +1,235 @@
+{
+  "name": "03 — IT Approval Gate",
+  "nodes": [
+    {
+      "id": "a3000001-0000-0000-0000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a3000002-0000-0000-0000-000000000001",
+      "name": "Set Custom Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\n$execution.customData.set('hire_id', hire.hire_id);\n$execution.customData.set('full_name', hire.full_name);\n$execution.customData.set('workflow_stage', '03-it-approval-gate');\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a3000003-0000-0000-0000-000000000001",
+      "name": "Build Approval Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\nconst tools = (hire.provisioning_plan?.tools || ['gsuite','slack']).join(', ');\nconst msg = [\n  `*New Hire Provisioning Approval Required*`,\n  ``,\n  `*Name:* ${hire.full_name}`,\n  `*Title:* ${hire.job_title}  |  *Dept:* ${hire.department}`,\n  `*Type:* ${hire.employment_type}  |  *Start:* ${hire.start_date}`,\n  `*Location:* ${hire.location}  |  *Manager:* ${hire.manager_email}`,\n  `*Role Group:* ${hire.role_group}`,\n  ``,\n  `*Accounts to provision:* \\`${tools}\\``,\n  ``,\n  `Click *Approve* to provision all accounts immediately. Click *Disapprove* to hold (e.g. start date shifted, hire rescinded).`\n].join('\\n');\nreturn [{ json: { ...hire, approval_message: msg } }];"
+      }
+    },
+    {
+      "id": "a3000004-0000-0000-0000-000000000001",
+      "name": "Slack — Send and Wait for Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [850, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "[SLACK_CREDENTIAL_ID]",
+          "name": "[SLACK_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.company_config.it_manager_slack_id }}"
+        },
+        "message": "={{ $json.approval_message }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "buttonApprovalStyle": "primary",
+            "buttonDisapprovalStyle": "secondary"
+          }
+        },
+        "options": {
+          "messageButtonLabel": "Review"
+        }
+      }
+    },
+    {
+      "id": "a3000005-0000-0000-0000-000000000001",
+      "name": "Check — Approved or Disapproved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1050, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "a3000008-0000-0000-0000-000000000001",
+      "name": "Postgres — Record APPROVED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1250, 200],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO onboarding_events (hire_id, event_type, status, performed_by) VALUES ($1,'APPROVAL_GRANTED','SUCCESS',$2); UPDATE new_hires SET it_approved_by=$2, it_approved_at=NOW(), status='APPROVED', updated_at=NOW() WHERE hire_id=$1;",
+        "options": {
+          "queryReplacement": "={{ $('Build Approval Message').item.json.hire_id }},{{ $json.data.approver || 'Unknown' }}",
+          "queryBatching": "transaction"
+        }
+      }
+    },
+    {
+      "id": "a3000009-0000-0000-0000-000000000001",
+      "name": "Merge Approval Into Hire",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 200],
+      "parameters": {
+        "jsCode": "const hire = $('Build Approval Message').item.json;\nconst approvalResp = $('Slack — Send and Wait for Approval').item.json;\nreturn [{ json: { ...hire, it_approved_by: approvalResp.data?.approver || 'Unknown', it_approved_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "a3000010-0000-0000-0000-000000000001",
+      "name": "Execute — 04 Account Provisioning",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1650, 200],
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "id", "value": "[04_ACCOUNT_PROVISIONING_WORKFLOW_ID]" },
+        "options": { "waitForSubWorkflow": true }
+      }
+    },
+    {
+      "id": "a3000006-0000-0000-0000-000000000001",
+      "name": "Postgres — Record DISAPPROVED (HELD)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1250, 450],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "INSERT INTO onboarding_events (hire_id, event_type, status, details, performed_by) VALUES ($1,'APPROVAL_HELD','SUCCESS',$2::jsonb,$3); UPDATE new_hires SET status='HELD', updated_at=NOW() WHERE hire_id=$1;",
+        "options": {
+          "queryReplacement": "={{ $('Build Approval Message').item.json.hire_id }},{{ JSON.stringify({ held_by: ($json.data.approver || 'Unknown'), reason: 'Disapproved in Slack' }) }},{{ $json.data.approver || 'system' }}",
+          "queryBatching": "transaction"
+        }
+      }
+    },
+    {
+      "id": "a3000007-0000-0000-0000-000000000001",
+      "name": "Slack — Notify HR of Hold",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [1450, 450],
+      "credentials": {
+        "slackApi": {
+          "id": "[SLACK_CREDENTIAL_ID]",
+          "name": "[SLACK_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Build Approval Message').item.json.company_config.hr_rep_slack_id }}"
+        },
+        "text": "={{ '\u23f8 *Provisioning HELD* \u2014 ' + $('Build Approval Message').item.json.full_name + ' (start: ' + $('Build Approval Message').item.json.start_date + ')\\nDisapproved by IT. Action required: resolve hold and re-trigger pipeline.' }}",
+        "otherOptions": {}
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [{ "node": "Set Custom Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Custom Data": {
+      "main": [
+        [{ "node": "Build Approval Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Approval Message": {
+      "main": [
+        [{ "node": "Slack — Send and Wait for Approval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Slack — Send and Wait for Approval": {
+      "main": [
+        [{ "node": "Check — Approved or Disapproved?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check — Approved or Disapproved?": {
+      "main": [
+        [{ "node": "Postgres — Record APPROVED", "type": "main", "index": 0 }],
+        [{ "node": "Postgres — Record DISAPPROVED (HELD)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Postgres — Record APPROVED": {
+      "main": [
+        [{ "node": "Merge Approval Into Hire", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Approval Into Hire": {
+      "main": [
+        [{ "node": "Execute — 04 Account Provisioning", "type": "main", "index": 0 }]
+      ]
+    },
+    "Postgres — Record DISAPPROVED (HELD)": {
+      "main": [
+        [{ "node": "Slack — Notify HR of Hold", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
