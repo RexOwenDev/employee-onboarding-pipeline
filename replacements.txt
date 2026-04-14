@@ -73,6 +73,21 @@ GSUITE_ADMIN_EMAIL
           must remain active; deactivating it breaks GSuite provisioning.
 
 
+SLACK_INVITE_MODE  [env]
+  Value:  "legacy" (default) or "scim"
+  Where:  $env reference in 04-account-provisioning "Provision All Services" Code
+          node (Slack branch) — controls which Slack API endpoint is used for
+          user provisioning
+  How to get: Determine per client:
+              - "legacy" for Enterprise Grid or Legacy Admin workspaces
+                (users.admin.invite is available)
+              - "scim" for standard paid workspaces (Business+, Pro) with
+                SCIM provisioning enabled
+              If the variable is unset, the Code node defaults to "legacy".
+  Note:   SCIM mode requires additional body structure changes to the Slack
+          branch fetch call AND a separate SLACK_SCIM_TOKEN variable.
+          See SETUP.md §11 for full SCIM configuration.
+
 ################################################################################
 # SECTION 2 — n8n WORKFLOW IDs
 # Assigned by n8n after import. These are circular references — each workflow
@@ -260,6 +275,17 @@ GSUITE_ADMIN_EMAIL
   Note:   Do NOT include @ or https:// — just the bare domain string.
 
 
+GSUITE_EMAIL_DOMAIN  [env, optional]
+  Value:  Company's Google Workspace domain (e.g. acme.com) — fallback only
+  Where:  $env reference in 04-account-provisioning — used when
+          hire.company_config.email_domain is null
+  How to get: The company's primary GSuite domain from Google Workspace Admin
+              Console → Account → Domains → Primary domain
+  Note:   Prefer setting email_domain in the company_config Postgres row rather
+          than this env var. This env is a break-glass fallback only — if both
+          the Postgres row and this env var are missing, GSuite provisioning will
+          fail with a missing-domain error.
+
 ################################################################################
 # SECTION 7 — NOTION
 ################################################################################
@@ -349,10 +375,15 @@ GSUITE_ADMIN_EMAIL
               string from the URL between /spreadsheets/d/ and /edit
               (e.g., docs.google.com/spreadsheets/d/[THIS_PART]/edit)
   Note:   The sheet must be shared with the Google account used by the Google
-          Sheets credential in n8n. Required columns (in order): hire_id,
-          full_name, job_title, department, employment_type, start_date,
-          role_group, provisioning_status, tools_provisioned, pipeline_started_at,
-          completed_at, notes.
+          Sheets credential in n8n. Required columns (exact order, exact spelling
+          — 22 columns total):
+            hire_id, full_name, personal_email, job_title, department,
+            role_group, employment_type, start_date, manager_email,
+            source_system, it_approved_by, it_approved_at, gsuite_status,
+            slack_status, notion_status, additional_tools_status,
+            welcome_email_sent, manager_notified, clickup_checklist_created,
+            check_ins_scheduled, pipeline_started_at, pipeline_completed_at
+          See SETUP.md Phase 5 for the authoritative column table.
 
 
 ################################################################################
@@ -456,9 +487,13 @@ GSUITE_ADMIN_EMAIL
               1. Obtain a Linear API key from linear.app → Settings → API →
                  Personal API Keys → Create key.
               2. Store as LINEAR_API_KEY in n8n Settings → Variables.
-              3. Replace the throw line with a GraphQL mutation to
-                 https://api.linear.app/graphql (inviteUser or createOrganizationInvite).
-              4. See SETUP.md §4.2 for the full adapter template.
+              3. API endpoint: https://api.linear.app/graphql
+                 Required scope: write (for member mutation)
+                 Auth header: Authorization: <LINEAR_API_KEY>
+              4. Implement the memberInvite mutation per Linear's current GraphQL
+                 schema. Field names and required variables are in Linear's API
+                 docs — they change. Client-specific implementation.
+              5. See SETUP.md §4.2 for full setup notes.
 
 [HUBSPOT_ADAPTER]
   Value:  Stub marker — replace with real HubSpot provisioning logic
