@@ -1,0 +1,88 @@
+{
+  "name": "08 — Audit Log",
+  "nodes": [
+    {
+      "id": "a8000001-0000-0000-0000-000000000001",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a8000002-0000-0000-0000-000000000001",
+      "name": "Build Audit Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst pr = d.provisioning_results || {};\nconst notif = d.notification_results || {};\n\n// Build 22-column audit row in sheet column order.\n// Sheet column headers (row 1) must match this order exactly — see SETUP.md §5.\n// valueInputOption RAW (configured on the Sheets node) prevents formula injection.\nconst row = {\n  hire_id:                     d.hire_id                    || '',\n  full_name:                   d.full_name                  || '',\n  personal_email:              d.personal_email             || '',\n  job_title:                   d.job_title                  || '',\n  department:                  d.department                 || '',\n  role_group:                  d.role_group                 || '',\n  employment_type:             d.employment_type            || '',\n  start_date:                  d.start_date                 || '',\n  manager_email:               d.manager_email              || '',\n  source_system:               d.source_system              || '',\n  it_approved_by:              d.it_approved_by             || '',\n  it_approved_at:              d.it_approved_at             || '',\n  gsuite_status:               pr.gsuite                    || 'NOT_RUN',\n  slack_status:                pr.slack                     || 'NOT_RUN',\n  notion_status:               pr.notion                    || 'NOT_RUN',\n  additional_tools_status:     JSON.stringify(pr.additional || {}),\n  welcome_email_sent:          notif.welcome_email_sent     ? 'TRUE' : 'FALSE',\n  manager_notified:            notif.manager_notified       ? 'TRUE' : 'FALSE',\n  clickup_checklist_created:   d.clickup_checklist_created  ? 'TRUE' : 'FALSE',\n  check_ins_scheduled:         String(d.check_ins_scheduled || 0),\n  pipeline_started_at:         d.pipeline_started_at        || '',\n  pipeline_completed_at:       new Date().toISOString()\n};\n\nreturn [{ json: row }];"
+      }
+    },
+    {
+      "id": "a8000003-0000-0000-0000-000000000001",
+      "name": "Google Sheets — Append Audit Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [650, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "[GOOGLE_SHEETS_CREDENTIAL_ID]",
+          "name": "[GOOGLE_SHEETS_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "[AUDIT_GOOGLE_SHEET_ID]"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Onboarding Audit Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "useAppend": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Audit Row": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets — Append Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
