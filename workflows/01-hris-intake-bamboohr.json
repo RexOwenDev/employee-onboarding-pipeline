@@ -1,0 +1,325 @@
+{
+  "name": "01 — HRIS Intake (BambooHR)",
+  "nodes": [
+    {
+      "id": "a1000001-0000-0000-0000-000000000001",
+      "name": "BambooHR Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [250, 300],
+      "webhookId": "[BAMBOOHR_WEBHOOK_ID]",
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bamboohr-intake",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      }
+    },
+    {
+      "id": "a1000002-0000-0000-0000-000000000001",
+      "name": "Verify HMAC + Normalize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\n// ── 1. Extract raw body and signature ──────────────────────────────────────\nconst item = $input.first();\nlet rawBody;\nif (item.binary?.data?.data) {\n  rawBody = Buffer.from(item.binary.data.data, 'base64').toString('utf8');\n} else if (item.json.rawBody) {\n  rawBody = item.json.rawBody;\n} else {\n  // Fallback: re-serialize parsed body. Caveat: not byte-perfect vs. original bytes.\n  // For production with BambooHR (JSON-only webhooks), this is acceptable.\n  rawBody = JSON.stringify(item.json.body);\n}\nconst signature = (item.json.headers['x-bamboohr-signature'] || '').trim();\nconst secret = $env['BAMBOOHR_HMAC_SECRET'];\n\nif (!secret) throw new Error('BAMBOOHR_HMAC_SECRET environment variable not set');\nif (!signature) throw new Error('Missing X-BambooHR-Signature header');\n\n// ── 2. Timing-safe HMAC-SHA256 comparison ──────────────────────────────────\nconst expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');\nlet sigValid = false;\ntry {\n  const sigBuf = Buffer.from(signature, 'hex');\n  const expBuf = Buffer.from(expected, 'hex');\n  sigValid = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);\n} catch (_) { sigValid = false; }\nif (!sigValid) throw new Error('HMAC signature verification failed');\n\n// ── 3. Replay protection ────────────────────────────────────────────────────\nconst body = item.json.body;\nconst eventTimeStr = body.eventTime || body.event_time || body.createdAt;\nif (eventTimeStr) {\n  const ageMs = Date.now() - new Date(eventTimeStr).getTime();\n  if (ageMs > 10 * 60 * 1000) {\n    throw new Error(`Replay protection: webhook is ${Math.floor(ageMs / 60000)}m old`);\n  }\n}\n\n// ── 4. Normalize BambooHR → canonical NewHirePayload ───────────────────────\nconst employee = body.employee || body;\nconst firstName = employee.firstName || employee.first_name || employee.preferredName || '';\nconst lastName  = employee.lastName  || employee.last_name  || '';\nconst employmentTypeRaw = (employee.employmentStatus || employee.employment_status || employee.employeeType || '').toLowerCase();\nconst employment_type = employmentTypeRaw.includes('part')\n  ? 'PART_TIME'\n  : (employmentTypeRaw.includes('contract') || employmentTypeRaw.includes('temp')) ? 'CONTRACTOR' : 'FULL_TIME';\n\nconst hire = {\n  hire_id: String(employee.id || employee.employeeId || employee.employee_id || ''),\n  first_name: firstName,\n  last_name: lastName,\n  full_name: `${firstName} ${lastName}`.trim(),\n  personal_email: employee.personalEmail || employee.personal_email || employee.homeEmail || '',\n  job_title: employee.jobTitle || employee.job_title || employee.title || '',\n  department: employee.department || employee.departmentName || '',\n  employment_type,\n  start_date: employee.hireDate || employee.hire_date || employee.startDate || employee.start_date || '',\n  manager_email: employee.supervisorEmail || employee.supervisor_email || employee.managerEmail || '',\n  location: employee.location || employee.workLocation || employee.homeLocation || 'REMOTE',\n  client_slug: $env['CLIENT_SLUG'] || '[CLIENT_SLUG]',\n  received_at: new Date().toISOString(),\n  source_system: 'bamboohr'\n};\n\n// ── 5. Validate required fields ─────────────────────────────────────────────\nconst required = ['hire_id', 'first_name', 'last_name', 'personal_email', 'job_title', 'start_date'];\nconst missing = required.filter(f => !hire[f]);\nif (missing.length > 0) throw new Error(`BambooHR payload missing: ${missing.join(', ')}`);\n\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a1000003-0000-0000-0000-000000000001",
+      "name": "Postgres — Idempotency Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "SELECT hire_id, status FROM new_hires WHERE hire_id = $1 LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ $json.hire_id }}",
+          "queryBatching": "single"
+        }
+      }
+    },
+    {
+      "id": "a1000004-0000-0000-0000-000000000001",
+      "name": "Check — Already Processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [850, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "version": 2,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "a1000005-0000-0000-0000-000000000001",
+      "name": "Respond — Duplicate (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1050, 450],
+      "parameters": {
+        "options": {},
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"acknowledged\",\n  \"message\": \"hire_id already processed\",\n  \"hire_id\": \"{{ $('Verify HMAC + Normalize Payload').item.json.hire_id }}\"\n}"
+      }
+    },
+    {
+      "id": "a1000006-0000-0000-0000-000000000001",
+      "name": "Postgres — Load Company Config",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1050, 200],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "SELECT * FROM company_config WHERE slug = $1 AND active = true LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ $('Verify HMAC + Normalize Payload').item.json.client_slug }}",
+          "queryBatching": "single"
+        }
+      }
+    },
+    {
+      "id": "a1000007-0000-0000-0000-000000000001",
+      "name": "Merge — Hire + Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "parameters": {
+        "jsCode": "const hire = $('Verify HMAC + Normalize Payload').item.json;\nconst configRows = $input.all();\nif (configRows.length === 0 || !configRows[0].json.slug) {\n  throw new Error(`No active company_config found for client_slug: ${hire.client_slug}`);\n}\nreturn [{ json: { ...hire, company_config: configRows[0].json } }];"
+      }
+    },
+    {
+      "id": "a1000008-0000-0000-0000-000000000001",
+      "name": "Postgres — Insert New Hire",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1450, 200],
+      "credentials": {
+        "postgres": {
+          "id": "[POSTGRES_CREDENTIAL_ID]",
+          "name": "[POSTGRES_CREDENTIAL_NAME]"
+        }
+      },
+      "parameters": {
+        "resource": "database",
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "new_hires",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "hire_id":         { "__rl": true, "value": "={{ $json.hire_id }}", "mode": "expression" },
+            "full_name":       { "__rl": true, "value": "={{ $json.full_name }}", "mode": "expression" },
+            "personal_email":  { "__rl": true, "value": "={{ $json.personal_email }}", "mode": "expression" },
+            "job_title":       { "__rl": true, "value": "={{ $json.job_title }}", "mode": "expression" },
+            "department":      { "__rl": true, "value": "={{ $json.department }}", "mode": "expression" },
+            "employment_type": { "__rl": true, "value": "={{ $json.employment_type }}", "mode": "expression" },
+            "start_date":      { "__rl": true, "value": "={{ $json.start_date }}", "mode": "expression" },
+            "manager_email":   { "__rl": true, "value": "={{ $json.manager_email }}", "mode": "expression" },
+            "location":        { "__rl": true, "value": "={{ $json.location }}", "mode": "expression" },
+            "client_slug":     { "__rl": true, "value": "={{ $json.client_slug }}", "mode": "expression" },
+            "source_system":   { "__rl": true, "value": "={{ $json.source_system }}", "mode": "expression" }
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1000009-0000-0000-0000-000000000001",
+      "name": "Set Custom Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 200],
+      "parameters": {
+        "jsCode": "const hire = $('Merge — Hire + Config').item.json;\n$execution.customData.set('hire_id', hire.hire_id);\n$execution.customData.set('full_name', hire.full_name);\n$execution.customData.set('workflow_stage', '01-hris-intake');\nreturn [{ json: hire }];"
+      }
+    },
+    {
+      "id": "a1000010-0000-0000-0000-000000000001",
+      "name": "Execute — 02 Role Classifier",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1850, 200],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "[02_ROLE_CLASSIFIER_WORKFLOW_ID]"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "a1000011-0000-0000-0000-000000000001",
+      "name": "Respond — 200 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2050, 200],
+      "parameters": {
+        "options": {},
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"accepted\",\n  \"hire_id\": \"{{ $('Verify HMAC + Normalize Payload').item.json.hire_id }}\",\n  \"message\": \"Onboarding pipeline initiated\"\n}"
+      }
+    }
+  ],
+  "connections": {
+    "BambooHR Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify HMAC + Normalize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify HMAC + Normalize Payload": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Idempotency Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Idempotency Check": {
+      "main": [
+        [
+          {
+            "node": "Check — Already Processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check — Already Processed?": {
+      "main": [
+        [
+          {
+            "node": "Respond — Duplicate (200)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Postgres — Load Company Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Load Company Config": {
+      "main": [
+        [
+          {
+            "node": "Merge — Hire + Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge — Hire + Config": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert New Hire",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert New Hire": {
+      "main": [
+        [
+          {
+            "node": "Set Custom Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Custom Data": {
+      "main": [
+        [
+          {
+            "node": "Execute — 02 Role Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute — 02 Role Classifier": {
+      "main": [
+        [
+          {
+            "node": "Respond — 200 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "[00_ERROR_HANDLER_WORKFLOW_ID]",
+    "saveDataSuccessExecution": "none",
+    "executionTimeout": 300
+  },
+  "meta": {
+    "instanceId": "[INSTANCE_ID]"
+  }
+}
