@@ -1,0 +1,76 @@
+{
+  "name": "00-error-handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a0000001-0000-0000-0000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse error payload from n8n Error Trigger\nconst execError = $input.first().json;\nconst customData = execError.execution?.customData || {};\n\n// Classify severity by workflow name\nconst wfName = execError.workflow?.name || '';\nconst severity = (() => {\n  if (wfName.includes('hris-intake') || wfName.includes('it-approval')) return 'CRITICAL';\n  if (wfName.includes('account-provisioning') || wfName.includes('role-classifier')) return 'HIGH';\n  return 'LOW';\n})();\n\nconst severityEmoji = { CRITICAL: '🚨', HIGH: '⚠️', LOW: '📋' }[severity];\n\nconst hireContext = customData.hire_id\n  ? `*Hire:* ${customData.full_name || 'Unknown'} \\`${customData.hire_id}\\``\n  : '_No hire context — error occurred before hire_id was set_';\n\nconst slackText = [\n  `${severityEmoji} *[${severity}] Onboarding Pipeline Error*`,\n  ``,\n  `*Workflow:* ${execError.workflow?.name || 'Unknown'}`,\n  `*Failed Node:* ${execError.execution?.lastNodeExecuted || 'Unknown'}`,\n  `*Error:* ${execError.execution?.error?.message || 'Unknown error'}`,\n  hireContext,\n  `*Execution ID:* \\`${execError.execution?.id || 'Unknown'}\\``,\n  `*Time:* ${new Date().toISOString()}`\n].join('\\n');\n\nreturn [{\n  json: {\n    severity,\n    slackText,\n    workflowName: execError.workflow?.name || 'Unknown',\n    hireId: customData.hire_id || null,\n    fullName: customData.full_name || null,\n    errorMessage: execError.execution?.error?.message || 'Unknown error',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a0000002-0000-0000-0000-000000000001",
+      "name": "Parse Error Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "[SLACK_HR_OPS_ALERTS_CHANNEL_ID]"
+        },
+        "text": "={{ $json.slackText }}",
+        "otherOptions": {}
+      },
+      "id": "a0000003-0000-0000-0000-000000000001",
+      "name": "Slack — Post Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [650, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "[SLACK_CREDENTIAL_ID]",
+          "name": "[SLACK_CREDENTIAL_NAME]"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Error Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Error Context": {
+      "main": [
+        [
+          {
+            "node": "Slack — Post Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveDataSuccessExecution": "none",
+    "executionTimeout": 60
+  }
+}
